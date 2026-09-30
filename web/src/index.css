@@ -1,0 +1,363 @@
+@import 'tailwindcss';
+/* Bundled fonts (no CDN): Inter for UI text, JetBrains Mono for code. The wordmark is drawn in Logo.tsx. */
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+@plugin '@tailwindcss/typography';
+
+/* Dark mode follows the `.dark` class on <html> (toggled in the sidebar), not the OS. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-side: var(--c-side);
+  --color-panel: var(--c-panel);
+  --color-sunken: var(--c-sunken);
+  --color-bubble: var(--c-bubble);
+  --color-line: var(--c-line);
+  --color-fg: var(--c-fg);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+  --color-accent: var(--c-accent);
+  --color-accent-strong: var(--c-accent-strong);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-accent-fg: var(--c-accent-fg);
+  --color-plan: var(--c-plan);
+  --color-edit: var(--c-edit);
+  /* Latin glyphs come from Inter; CJK falls through to PingFang (macOS) or YaHei UI (Windows). */
+  --font-sans:
+    'Inter Variable', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans SC', 'Source Han Sans SC',
+    system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:
+    'JetBrains Mono Variable', ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, 'PingFang SC',
+    'Microsoft YaHei UI', monospace;
+  --shadow-card: var(--sh-card);
+  --shadow-pop: var(--sh-pop);
+  --shadow-float: var(--sh-float);
+}
+
+/* Claude's warm neutrals with the Claude Code orange; plan/edit tints follow the CLI's mode colors. */
+:root {
+  --c-bg: #faf9f5;
+  --c-side: #f4f3ee;
+  --c-panel: #ffffff;
+  --c-sunken: #ecebe4;
+  --c-bubble: #f0eee6;
+  --c-line: #e5e2d9;
+  --c-fg: #1f1e1d;
+  --c-muted: #75736b;
+  --c-faint: #a3a097;
+  --c-accent: #d97757;
+  --c-accent-strong: #c15f3c;
+  --c-accent-soft: #f4d5c8;
+  --c-accent-fg: #ffffff;
+  --c-plan: #2f8277;
+  --c-edit: #7c5fd0;
+  --c-code-bg: #22211f;
+  --c-code-border: transparent;
+  --c-code-fg: #b4502f;
+  --c-mark-from: #e5906f;
+  --c-mark-to: #c15f3c;
+  --c-shimmer: #f3b8a0;
+  --c-scroll: rgb(31 30 29 / 0.16);
+  --c-scroll-hover: rgb(31 30 29 / 0.3);
+  --sh-card: 0 1px 2px rgb(31 30 29 / 0.04), 0 1px 1px rgb(31 30 29 / 0.02);
+  --sh-pop: 0 14px 36px -10px rgb(31 30 29 / 0.18), 0 4px 12px -4px rgb(31 30 29 / 0.08);
+  --sh-float: 0 10px 30px -12px rgb(31 30 29 / 0.16), 0 2px 6px -2px rgb(31 30 29 / 0.05);
+  color-scheme: light;
+}
+
+.dark {
+  --c-bg: #262624;
+  --c-side: #1f1e1d;
+  --c-panel: #30302e;
+  --c-sunken: #383734;
+  --c-bubble: #1b1a19;
+  --c-line: #3d3c38;
+  --c-fg: #f4f3ee;
+  --c-muted: #a6a39a;
+  --c-faint: #7d7a73;
+  --c-accent: #d97757;
+  --c-accent-strong: #e8906f;
+  --c-accent-soft: #5a3b2f;
+  --c-accent-fg: #ffffff;
+  --c-plan: #5db3a7;
+  --c-edit: #b29df2;
+  --c-code-bg: #1a1918;
+  --c-code-border: rgb(255 255 255 / 0.06);
+  --c-code-fg: #f0a283;
+  --c-mark-from: #f2a585;
+  --c-mark-to: #d9714c;
+  --c-shimmer: #f9cdb9;
+  --c-scroll: rgb(255 255 255 / 0.14);
+  --c-scroll-hover: rgb(255 255 255 / 0.26);
+  --sh-card: 0 1px 2px rgb(0 0 0 / 0.25);
+  --sh-pop: 0 16px 40px -10px rgb(0 0 0 / 0.6), 0 4px 12px -4px rgb(0 0 0 / 0.35);
+  --sh-float: 0 12px 32px -12px rgb(0 0 0 / 0.55), 0 2px 6px -2px rgb(0 0 0 / 0.25);
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--c-bg);
+  color: var(--c-fg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--c-accent) 26%, transparent);
+}
+
+@layer base {
+  /* Keyboard focus only; `outline-none` utilities still win where a field draws its own focus state. */
+  :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--c-accent) 60%, transparent);
+    outline-offset: 2px;
+  }
+}
+
+/* ---- scrollbars: slim rounded thumbs, no arrow buttons ---- */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none;
+}
+::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-color: var(--c-scroll);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--c-scroll-hover);
+}
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  border-width: 2px;
+}
+/* Firefox has no ::-webkit-scrollbar; setting these in Chromium would switch the rules above off. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--c-scroll) transparent;
+  }
+}
+
+/* ---- markdown ---- */
+
+/* Typography colors follow the theme tokens, so the same values work in light and dark. */
+.prose {
+  --tw-prose-body: color-mix(in srgb, var(--c-fg) 92%, transparent);
+  --tw-prose-headings: var(--c-fg);
+  --tw-prose-lead: var(--c-muted);
+  --tw-prose-links: var(--c-accent-strong);
+  --tw-prose-bold: var(--c-fg);
+  --tw-prose-counters: var(--c-muted);
+  --tw-prose-bullets: var(--c-faint);
+  --tw-prose-hr: var(--c-line);
+  --tw-prose-quotes: var(--c-muted);
+  --tw-prose-quote-borders: var(--c-accent-soft);
+  --tw-prose-captions: var(--c-muted);
+  --tw-prose-kbd: var(--c-fg);
+  --tw-prose-code: var(--c-code-fg);
+  --tw-prose-pre-code: #e8e6df;
+  --tw-prose-pre-bg: var(--c-code-bg);
+  --tw-prose-th-borders: var(--c-line);
+  --tw-prose-td-borders: var(--c-line);
+}
+
+/* Chat-sized markdown: a touch larger than prose-sm, with airier lines for CJK text. */
+.chat-md {
+  font-size: 0.9375rem;
+  line-height: 1.75;
+}
+.chat-md > :first-child {
+  margin-top: 0;
+}
+.chat-md > :last-child {
+  margin-bottom: 0;
+}
+.chat-md :where(h1, h2, h3, h4) {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.chat-md h1 {
+  margin: 1.2em 0 0.5em;
+  font-size: 1.4em;
+}
+.chat-md h2 {
+  margin: 1.15em 0 0.45em;
+  font-size: 1.22em;
+}
+.chat-md h3 {
+  margin: 1em 0 0.4em;
+  font-size: 1.07em;
+}
+.chat-md h4 {
+  margin: 1em 0 0.35em;
+  font-size: 1em;
+}
+.chat-md :where(ul, ol) {
+  margin-block: 0.5em;
+}
+.chat-md li {
+  margin-block: 0.2em;
+}
+.chat-md table {
+  margin-block: 1em;
+  font-size: 0.875em;
+}
+.chat-md hr {
+  margin-block: 1.5em;
+}
+.chat-md thead th {
+  background: color-mix(in srgb, var(--c-fg) 4%, transparent);
+  padding-block: 0.45em;
+}
+
+.prose a {
+  text-decoration-color: color-mix(in srgb, var(--c-accent) 45%, transparent);
+  text-underline-offset: 3px;
+}
+.prose a:hover {
+  text-decoration-color: currentColor;
+}
+.prose blockquote {
+  font-style: normal;
+  font-weight: 400;
+}
+.prose blockquote p::before,
+.prose blockquote p::after {
+  content: none;
+}
+
+/* Code blocks stay dark in both themes to match the highlight.js palette. */
+.prose pre {
+  background: var(--c-code-bg);
+  color: #e8e6df;
+  border: 1px solid var(--c-code-border);
+  border-radius: 0.75rem;
+  padding: 0.875rem 1.05rem;
+  font-size: 0.8125rem;
+  line-height: 1.65;
+}
+.prose :not(pre) > code {
+  background: color-mix(in srgb, var(--c-fg) 6.5%, transparent);
+  color: var(--c-code-fg);
+  padding: 0.12em 0.38em;
+  border-radius: 0.3rem;
+  font-size: 0.86em;
+  font-weight: 450;
+}
+.prose :not(pre) > code::before,
+.prose :not(pre) > code::after {
+  content: none;
+}
+.prose pre code.hljs {
+  background: transparent;
+  padding: 0;
+}
+
+/* SVG previews sit on a light transparency grid in both themes, so dark strokes stay visible. */
+.svg-preview {
+  background: conic-gradient(#ece9e2 25%, #fbfaf7 0 50%, #ece9e2 0 75%, #fbfaf7 0) 0 0 / 16px 16px;
+  color: #5f5d55;
+}
+.dark .svg-preview {
+  background: conic-gradient(#d3d0c8 25%, #e6e3dc 0 50%, #d3d0c8 0 75%, #e6e3dc 0) 0 0 / 16px 16px;
+}
+
+/* ---- motion ---- */
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--pop-from, 4px)) scale(0.985);
+  }
+}
+/* Popovers ease in from the side they open toward. */
+.pop-in {
+  animation: pop-in 150ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.pop-in-down {
+  --pop-from: -4px;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.fade-up {
+  animation: fade-up 420ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+
+/* The "working" spark: a slow turn that breathes, like the CLI's ✻ spinner. */
+@keyframes spark-work {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(180deg) scale(0.78);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
+}
+.spark-working {
+  animation: spark-work 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+/* Terminal caret after the start-page wordmark. */
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+.caret-blink {
+  animation: caret-blink 1.1s steps(1) infinite;
+}
+
+/* The status line's verb: accent text with a lighter band sweeping right to left, like the CLI's glimmer. */
+@keyframes shimmer {
+  from {
+    background-position: 0% 0;
+  }
+  to {
+    background-position: 100% 0;
+  }
+}
+.shimmer-text {
+  background: linear-gradient(90deg, var(--c-accent) 40%, var(--c-shimmer) 50%, var(--c-accent) 60%) 0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 2.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pop-in,
+  .fade-up,
+  .spark-working,
+  .caret-blink,
+  .shimmer-text {
+    animation: none;
+  }
+}

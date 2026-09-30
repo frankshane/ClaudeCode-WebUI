@@ -1,0 +1,20 @@
+{
+  "name": "@ccwebui/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.ts --dev",
+    "start": "node src/index.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.281",
+    "@hono/node-server": "^2.1.1",
+    "hono": "^4.13.9",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}

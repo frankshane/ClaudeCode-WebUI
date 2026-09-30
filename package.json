@@ -1,0 +1,25 @@
+{
+  "name": "ccwebui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local web UI for Claude Code, built on the Claude Agent SDK",
+  "type": "module",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web",
+    "start": "npm run start -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "concurrently": "^10.0.5",
+    "typescript": "^7.0.2"
+  }
+}
