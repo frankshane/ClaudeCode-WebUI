@@ -1,5 +1,7 @@
 # CC WebUI
 
+**简体中文** | [English](README.en.md)
+
 在浏览器里使用 Claude Code 的本地 Web 界面，基于 [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript)。
 
 ```
@@ -8,6 +10,21 @@
 
 会话、登录、CLAUDE.md、settings、插件、skill、MCP 全部复用本机 Claude Code 的配置（`~/.claude`），
 在终端里开的会话可以在网页里接着聊，反之亦然。
+
+在同一个界面里管理项目和会话，选择模型、推理强度与权限模式，查看工具执行过程、上下文用量和每轮费用估算。
+
+![CC WebUI 首页动态演示](docs/screenshots/homepage.gif)
+
+## 目录
+
+- [环境要求](#环境要求)
+- [使用](#使用)
+- [功能介绍](#功能介绍)
+- [安全](#安全)
+- [代码结构](#代码结构)
+- [版本对应](#版本对应)
+- [冒烟测试](#冒烟测试)
+- [已知限制](#已知限制)
 
 ## 环境要求
 
@@ -40,14 +57,14 @@ npm run dev       # 同时启动后端 (8787) 和 Vite (5173)，打开终端里�
 
 类型检查：`npm run typecheck`。
 
-## 界面
+## 功能介绍
 
-### 起始页
+### 起始页与项目选择
 
 打开页面、点「新会话」或输入 `/clear` 时，页面中间是 Claude Code 的标志和一个大输入框。
 输入框上方可以选择在哪个项目文件夹里开始，发送第一条消息后切换成对话布局。
 
-### 输入框
+### 输入框与快捷操作
 
 | 位置 | 控件 |
 |---|---|
@@ -62,7 +79,24 @@ npm run dev       # 同时启动后端 (8787) 和 Vite (5173)，打开终端里�
 在 git 仓库里按 `.gitignore` 过滤，选中目录可以继续往下选。
 `/clear`、`/new`、`/model`、`/effort` 由网页直接处理，和右下角的选择器保持同步。
 
-### 侧边栏
+### 模型与推理强度
+
+点击输入框右下角的模型按钮，可以在同一个菜单中选择模型和推理强度，不需要回到终端修改。
+推理强度包括 Auto / Low / Medium / High / Extra High / Max，实际可选项随模型支持情况变化；对话过程中也可以调整。
+使用 `/model`、`/effort` 修改时，界面上的选项会同步更新。
+
+![模型与推理强度选择](docs/screenshots/model-and-reasoning.png)
+
+### 上下文用量与压缩
+
+输入框下方的圆环持续显示上下文窗口的已用比例。点开后可以查看用量分类、已用 token 数和窗口容量，
+帮助判断当前会话是否需要压缩。用量达到 70% 时变黄，达到 90% 时变红。
+
+面板中的「压缩」按钮会发送 `/compact`；会话有内容、且 Claude 空闲时可以使用。
+
+![输入框下方的上下文用量](docs/screenshots/context-usage.png)
+
+### 侧边栏与会话管理
 
 - 按「文件夹 → 会话」的树状结构列出所有项目的历史会话，文件夹可以折叠、隐藏、按最近使用或名称排序
 - 「工作区」右边的文件夹按钮会弹出系统的文件夹选择窗口（Windows 是资源管理器样式，macOS 是 Finder，Linux 用 zenity 或 kdialog），
@@ -74,30 +108,110 @@ npm run dev       # 同时启动后端 (8787) 和 Vite (5173)，打开终端里�
 
 快捷键：Ctrl+K 搜索，Ctrl+Shift+O 新会话。
 
-### 对话
+#### 删除单个会话
 
-- 流式输出，Markdown、代码高亮；SVG 代码块右上角有预览按钮，可以在代码和渲染效果之间切换
-- 工具调用卡片：Bash/PowerShell 输出、Edit/Write 的 diff、Read/Grep/Glob、子 Agent 嵌套展示、任务列表
-- 运行时显示和终端一样的状态行，例如 `✻ Cascading… (40s · ↓ 1.7k tokens · thinking with xhigh effort)`
-- 每轮结束后显示统计行：`输入 41.9k · 输出 49 · 1.8s · 1 轮 · 本轮 $0.005 · 累计 $0.103`，
-  鼠标悬停可以看到缓存读写的明细。费用是按 API 价格的估算，不是账单；用订阅账号登录时实际不按 token 扣费
+在会话的 `…` 菜单中选择删除，会先出现确认提示。确认后会删除磁盘上对应的对话记录，无法恢复。
+这个操作针对选中的会话，便于清理不再需要的历史对话。
+
+![删除单个会话](docs/screenshots/delete-conversation.png)
+
+### 对话与内容渲染
+
+#### Markdown 与表格
+
+回复以流式方式显示，支持 Markdown、代码高亮和表格渲染。
+表格内容直接在对话中按行列呈现，代码则以带高亮的代码块展示。
+
+![对话中的 Markdown 表格](docs/screenshots/markdown-tables.png)
+
+#### SVG 预览
+
+SVG 代码块右上角有预览按钮，可以在源码和渲染效果之间切换，在聊天界面里直接查看生成的 SVG。
+预览通过 `<img>` 显示，SVG 中的脚本不会执行，也不会加载外部资源。
+
+![对话中的 SVG 渲染与预览](docs/screenshots/svg-preview.webp)
+
+#### 工具调用卡片
+
+工具执行过程以独立卡片显示，便于把正文回复与操作过程分开阅读：
+
+- Bash / PowerShell：查看终端调用及输出。
+- Edit / Write：查看文件修改的 diff。
+- Read / Grep / Glob：查看文件读取与搜索过程。
+- 子 Agent 与任务列表：查看嵌套的执行过程和任务进展。
+
+![工具使用与终端调用卡片](docs/screenshots/tool-calls.png)
+
+#### CLI 风格的运行状态
+
+Claude 工作时，聊天界面会显示 Claude Code CLI 风格的动态状态词，以及耗时、token 和推理强度等状态信息，
+例如 `✻ Cascading… (40s · ↓ 1.7k tokens · thinking with xhigh effort)`。
+
+下面是两张运行状态示例：
+
+![CLI 风格的运行状态示例一](docs/screenshots/thinking-status.png)
+
+![CLI 风格的运行状态示例二](docs/screenshots/thinking-status-alt.png)
+
+#### Token 用量
+
+每轮结束后，对话下方会显示输入 / 输出 token 数、耗时和轮数。
+把鼠标停在统计行上，还可以查看缓存读写的明细。
+
+![每轮对话的输入与输出 token 用量](docs/screenshots/token-usage.png)
+
+#### 每轮费用与累计费用
+
+统计行同时显示本轮费用和当前会话的累计费用，便于比较单次交互与整个会话的用量。
+例如：`输入 41.9k · 输出 49 · 1.8s · 1 轮 · 本轮 $0.005 · 累计 $0.103`。
+
+这里的费用是按 API 价格计算的估算值，不是实际账单；使用订阅账号登录时，实际不按 token 扣费。
+
+![每轮费用与累计费用统计](docs/screenshots/cost-tracking.png)
+
+#### 编辑、恢复与系统提示
+
 - 编辑并重发：鼠标移到以前的某条提问上，点铅笔图标，会从这条提问之前分叉出一个新会话，并把原文放回输入框，原会话不变
 - 历史里的斜杠命令输出（例如 `/context` 的表格）恢复会话后也能正常显示
 - API 重试、自动拒绝等系统提示会显示在对话里
 
-### 权限审批
+### 权限模式与审批
+
+在输入框下方可以直接选择 Claude 的权限模式：始终询问（默认）、自动接受编辑、计划模式、完全权限。
+「完全权限」会跳过所有确认，开启后输入框上方会显示红色提示。
+
+![输入框下方的权限模式选择](docs/screenshots/permission-modes.png)
+
+需要确认的操作会在对话中显示审批面板：
 
 - 工具调用：允许 / 本会话始终允许 / 拒绝（可以附上理由告诉 Claude 应该怎么做）；Edit 和 Write 会显示 diff
 - Claude 提问（AskUserQuestion）：选项卡片，也可以自己填写
 - 计划审批（计划模式下）：批准后自动接受编辑 / 批准后逐项确认 / 写下修改意见继续规划
 
-### 插件
+### Skills 与插件
+
+#### 统一入口
+
+输入框左下角的 `+` 菜单提供 Skills、插件管理和附件入口，直接在聊天界面中选择需要的能力。
+
+![Skills 与插件入口](docs/screenshots/skills-and-plugins.png)
+
+#### 选择 Skill
+
+打开 Skills 列表后，选择的 skill 会插入到输入框开头，再补充具体需求即可发送。
+也可以输入 `/` 打开命令和 skill 菜单。
+
+![在输入框中选择 Skill](docs/screenshots/skill-picker.png)
+
+#### 插件管理与市场
 
 在 `+` → 插件里管理，改动写入 Claude Code 的用户设置，终端里同样生效，当前会话会自动重新加载：
 
 - 已安装：启用、停用、卸载
 - 市场：列出已配置的插件市场里的所有插件，按安装量排序，可以搜索和安装。「更新市场」会从 GitHub 等来源拉取最新目录（需要联网）
 - 有的插件要在本机执行市场声明的命令才能安装，这时会先把命令显示出来，确认后才会执行
+
+![浏览插件市场并安装插件](docs/screenshots/plugin-marketplace.png)
 
 ### 多会话
 
@@ -132,6 +246,7 @@ web/src/
   lib/transcript.ts       把 SDK 消息整理成界面要渲染的条目
   components/             界面组件（ChatView、Composer、Sidebar、Transcript、PermissionPanel、PluginsPanel、ContextMeter …）
 scripts/smoke.ts          端到端冒烟测试
+docs/screenshots/         中英文 README 共用的功能截图
 ```
 
 ## 版本对应
