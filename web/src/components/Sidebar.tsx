@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowDownWideNarrow,
   Check,
@@ -44,7 +44,7 @@ import {
 } from '../lib/store.ts';
 import { setTheme, useTheme } from '../lib/theme.ts';
 import { Dropdown } from './Dropdown.tsx';
-import { ClaudeCodeLogo } from './Logo.tsx';
+import { ClaudeCodeLogo, ClaudeMark } from './Logo.tsx';
 import { OpenFolder } from './OpenFolder.tsx';
 
 export function sessionTitle(s: SDKSessionInfo): string {
@@ -70,6 +70,40 @@ export function Sidebar() {
   const [opening, setOpening] = useState(false);
 
   const liveBySession = new Map<string, LiveInfo>(Object.values(lives).map((l) => [l.sessionId, l]));
+
+  // AI 作答完成未读提醒（红点机制）
+  const [unreadCompleted, setUnreadCompleted] = useState<Set<string>>(() => new Set());
+  const prevLiveStatusRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    const prev = prevLiveStatusRef.current;
+    const next = new Map<string, string>();
+    const newUnread = new Set(unreadCompleted);
+    let changed = false;
+
+    liveBySession.forEach((live, id) => {
+      const currentStatus = live.status;
+      next.set(id, currentStatus);
+      const prevStatus = prev.get(id);
+
+      // 从 running 变为非 running（作答完成），且用户当前没有聚焦在该会话 -> 亮红点
+      if (prevStatus === 'running' && currentStatus !== 'running' && view?.sessionId !== id) {
+        newUnread.add(id);
+        changed = true;
+      }
+    });
+
+    // 用户正在查看的活跃会话，自动消除红点
+    if (view?.sessionId && newUnread.has(view.sessionId)) {
+      newUnread.delete(view.sessionId);
+      changed = true;
+    }
+
+    prevLiveStatusRef.current = next;
+    if (changed) {
+      setUnreadCompleted(newUnread);
+    }
+  }, [liveBySession, view?.sessionId]);
 
   return (
     <aside className="flex w-72 shrink-0 flex-col border-r border-line bg-side">
@@ -156,6 +190,7 @@ export function Sidebar() {
               activeSessionId={view && samePath(view.cwd, f.cwd) ? view.sessionId : undefined}
               blankHere={!!view && samePath(view.cwd, f.cwd) && !view.sessionId}
               liveBySession={liveBySession}
+              unreadCompleted={unreadCompleted}
             />
           ))
         )}
@@ -174,8 +209,9 @@ function FolderNode(props: {
   activeSessionId: string | null | undefined;
   blankHere: boolean;
   liveBySession: Map<string, LiveInfo>;
+  unreadCompleted: Set<string>;
 }) {
-  const { folder, open, activeSessionId, blankHere, liveBySession } = props;
+  const { folder, open, activeSessionId, blankHere, liveBySession, unreadCompleted } = props;
   const [limit, setLimit] = useState(PAGE);
   // A session that's open but not yet on disk (its first reply is still coming).
   const unsaved = !!activeSessionId && !folder.sessions.some((s) => s.sessionId === activeSessionId);
@@ -240,6 +276,7 @@ function FolderNode(props: {
               time={s.lastModified}
               active={activeSessionId === s.sessionId}
               live={liveBySession.get(s.sessionId)}
+              hasUnread={unreadCompleted.has(s.sessionId)}
               onClick={() => openSession(folder.cwd, s.sessionId)}
             />
           ))}
@@ -265,9 +302,10 @@ function SessionRow(props: {
   time?: number;
   active: boolean;
   live?: LiveInfo;
+  hasUnread?: boolean;
   onClick?: () => void;
 }) {
-  const { session, title, time, active, live, onClick } = props;
+  const { session, title, time, active, live, hasUnread, onClick } = props;
   const [mode, setMode] = useState<RowMode>(null);
   const status = live?.status;
 
@@ -317,7 +355,7 @@ function SessionRow(props: {
       role="button"
       tabIndex={0}
       data-session={session?.sessionId}
-      className={`group flex h-9 cursor-pointer items-center gap-2 rounded-lg pr-1 pl-9 transition-colors ${
+      className={`group flex h-9 cursor-pointer items-center gap-2 rounded-lg pr-1 pl-6 transition-colors ${
         active
           ? 'bg-panel font-medium text-fg shadow-card ring-1 ring-line/70 dark:bg-sunken dark:ring-transparent'
           : 'text-fg/85 hover:bg-sunken/70'
@@ -325,6 +363,13 @@ function SessionRow(props: {
       onClick={onClick}
       onKeyDown={(e) => e.key === 'Enter' && onClick?.()}
     >
+      {/* 名字左侧动态指示：思考/运行时展示 WebUI 同款星芒旋转动效，等待确认时展示琥珀色指示 */}
+      {status === 'running' ? (
+        <ClaudeMark size={14} className="spark-working shrink-0 text-accent" />
+      ) : status === 'waiting' ? (
+        <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500 animate-pulse" title="等待你确认" />
+      ) : null}
+
       <span className="min-w-0 flex-1 truncate text-sm" title={title}>
         {title}
       </span>
@@ -333,10 +378,11 @@ function SessionRow(props: {
           {session.tag}
         </span>
       )}
-      {(status === 'running' || status === 'waiting') && (
+      {/* AI 作答完成未读提醒红点 */}
+      {hasUnread && !active && (
         <span
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${status === 'waiting' ? 'bg-amber-500' : 'animate-pulse bg-accent'}`}
-          title={status === 'waiting' ? '等待你确认' : '运行中'}
+          className="h-2 w-2 shrink-0 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.7)] animate-pulse"
+          title="AI 作答完成"
         />
       )}
       {time !== undefined && (
