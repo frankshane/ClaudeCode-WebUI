@@ -5,6 +5,7 @@ import { api, getToken, initToken, setToken, UnauthorizedError } from './lib/api
 import { closeSearch, connect, newChat, openSearch, useStore } from './lib/store.ts';
 import { ChatView } from './components/ChatView.tsx';
 import { SearchDialog } from './components/SearchDialog.tsx';
+import { SettingsDialog } from './components/SettingsDialog.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
 
 type Auth = 'checking' | 'ok' | 'missing' | 'invalid';
@@ -33,6 +34,7 @@ export function App() {
 function Shell() {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const searchOpen = useStore((s) => s.searchOpen);
+  const settingsOpen = useStore((s) => s.settingsOpen);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -55,6 +57,7 @@ function Shell() {
       {sidebarOpen && <Sidebar />}
       <ChatView />
       {searchOpen && <SearchDialog />}
+      {settingsOpen && <SettingsDialog />}
     </div>
   );
 }

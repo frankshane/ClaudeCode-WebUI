@@ -11,7 +11,7 @@ import { isFromForeignPage, isLoopbackHost, isLoopbackOrigin, loadToken, tokenMa
 import { LiveManager, type LiveSession } from './live.ts';
 import { cancelPick } from './picker.ts';
 import { staticHandler } from './static.ts';
-import type { ClientMsg, ServerMsg } from '../../shared/protocol.ts';
+import type { ClientMsg, ServerMsg, PermissionMode } from '../../shared/protocol.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { version } = JSON.parse(readFileSync(join(here, '..', '..', 'package.json'), 'utf8'));
@@ -114,12 +114,16 @@ function onConnection(ws: WebSocket): void {
     switch (msg.type) {
       case 'start':
         try {
+          const envMode = process.env.CC_PERMISSION_MODE as PermissionMode | undefined;
+          const permMode = (msg.permissionMode && msg.permissionMode !== 'default')
+            ? msg.permissionMode
+            : (envMode || msg.permissionMode || 'default');
           const live = await manager.start({
             cwd: msg.cwd,
             resume: msg.resume,
             model: msg.model,
             effort: msg.effort,
-            permissionMode: msg.permissionMode,
+            permissionMode: permMode,
           });
           attach(live, msg.reqId);
         } catch (err) {

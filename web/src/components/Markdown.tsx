@@ -15,7 +15,7 @@ const components: Components = {
 
 export const Markdown = memo(function Markdown({ text, className = '' }: { text: string; className?: string }) {
   return (
-    <div className={`chat-md prose prose-sm max-w-none break-words prose-p:my-2 prose-pre:my-2.5 ${className}`}>
+    <div className={`chat-md prose prose-sm max-w-none break-all [overflow-wrap:anywhere] min-w-0 prose-p:my-2 prose-pre:my-2.5 ${className}`}>
       <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components}>
         {text}
       </ReactMarkdown>
@@ -35,10 +35,10 @@ const SNIFFED_LANGS = new Set(['', 'xml', 'html', 'xhtml']);
 
 function Pre({ node, className = '', ...props }: ComponentProps<'pre'> & ExtraProps) {
   const svg = node ? svgSource(node) : null;
-  if (svg === null) return <pre className={className} {...props} />;
+  if (svg === null) return <pre className={`${className} max-w-full overflow-x-auto min-w-0`} {...props} />;
   return (
     <SvgBlock source={svg}>
-      <pre className={`${className} !my-0`} {...props} />
+      <pre className={`${className} max-w-full overflow-x-auto min-w-0 !my-0`} {...props} />
     </SvgBlock>
   );
 }

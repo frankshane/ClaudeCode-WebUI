@@ -83,6 +83,10 @@ export class LiveSession {
     this.opts = opts;
     this.onStateChange = onStateChange;
     this.debug = debug;
+    const envPermMode = process.env.CC_PERMISSION_MODE as PermissionMode | undefined;
+    const effectiveMode = (opts.permissionMode && opts.permissionMode !== 'default')
+      ? opts.permissionMode
+      : (envPermMode || opts.permissionMode || 'default');
     this.info = {
       liveId: randomUUID(),
       sessionId: opts.resume ?? randomUUID(),
@@ -91,7 +95,7 @@ export class LiveSession {
       model: opts.model ?? null,
       activeModel: null,
       effort: opts.effort ?? null,
-      permissionMode: opts.permissionMode ?? 'default',
+      permissionMode: effectiveMode,
       startedAt: Date.now(),
       turnStartedAt: null,
       turnPausedMs: 0,
@@ -298,6 +302,35 @@ export class LiveSession {
 
   private canUseTool: CanUseTool = (toolName, input, options) =>
     new Promise<PermissionResult>((resolve) => {
+      // 1. 全权模式 (bypassPermissions) 下直接秒级放行 (除了真正的用户问答与最终计划确认)
+      if (this.info.permissionMode === 'bypassPermissions' && toolName !== 'AskUserQuestion' && toolName !== 'ExitPlanMode') {
+        resolve({ behavior: 'allow', updatedInput: input });
+        return;
+      }
+
+      // 2. 计划模式 (plan) 下：调研、读取、搜索、子 Agent 探索、写计划文档全部自动放行，0 弹窗打扰！
+      // 只有最终计划确认 (ExitPlanMode) 或必须向用户提问 (AskUserQuestion) 才找用户确认
+      const isPlanMode = this.info.permissionMode === 'plan';
+      const isReadOnlyOrExplore =
+        toolName === 'Glob' ||
+        toolName === 'Grep' ||
+        toolName === 'Read' ||
+        toolName === 'Agent' ||
+        toolName === 'WebSearch' ||
+        toolName === 'WebFetch' ||
+        toolName === 'EnterPlanMode' ||
+        (toolName === 'Write' && String((input as any)?.file_path || '').includes('plans'));
+
+      if (isPlanMode && isReadOnlyOrExplore) {
+        resolve({ behavior: 'allow', updatedInput: input });
+        return;
+      }
+
+      // 3. 环境变量启用了 bypassPermissions：即使模型擅自切模式，只读与调研类工具一律自动放行
+      if (process.env.CC_PERMISSION_MODE === 'bypassPermissions' && toolName !== 'AskUserQuestion' && toolName !== 'ExitPlanMode') {
+        resolve({ behavior: 'allow', updatedInput: input });
+        return;
+      }
       const requestId = randomUUID();
       const onAbort = () => finish({ behavior: 'deny', message: 'Aborted.' });
       const finish = (result: PermissionResult) => {

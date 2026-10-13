@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowDownWideNarrow,
   Check,
@@ -11,10 +11,13 @@ import {
   FolderOpen,
   FolderPlus,
   GitFork,
+  ListTodo,
   Moon,
   PanelLeftClose,
   Pencil,
+  Plus,
   Search,
+  Settings as SettingsIcon,
   SquarePen,
   Sun,
   Tag,
@@ -24,27 +27,36 @@ import type { LiveInfo, SDKSessionInfo } from '../../../shared/protocol.ts';
 import { baseName, shortTime } from '../lib/format.ts';
 import {
   addProject,
+  createInstantTask,
   deleteSession,
+  extractTaskId,
   forkSession,
   hideProject,
+  isTaskPath,
   newChat,
   openSearch,
   openSession,
+  openSettings,
+  reorderFolders,
+  projectTitle,
+  removeTask,
   renameSession,
   setAllCollapsed,
   setSortBy,
   tagSession,
   toggleCollapsed,
+  toggleTasksCollapsed,
   samePath,
   toggleSidebar,
   unhideAllProjects,
   useFolders,
+  useTaskItems,
   useStore,
   type Folder,
 } from '../lib/store.ts';
 import { setTheme, useTheme } from '../lib/theme.ts';
 import { Dropdown } from './Dropdown.tsx';
-import { ClaudeCodeLogo } from './Logo.tsx';
+import { ClaudeCodeLogo, ClaudeMark } from './Logo.tsx';
 import { OpenFolder } from './OpenFolder.tsx';
 
 export function sessionTitle(s: SDKSessionInfo): string {
@@ -67,9 +79,45 @@ export function Sidebar() {
   const hiddenCount = useStore((s) => s.hiddenProjects.length);
   const sortBy = useStore((s) => s.sortBy);
   const folders = useFolders();
+  const taskItems = useTaskItems();
+  const tasksCollapsed = useStore((s) => s.tasksCollapsed);
   const [opening, setOpening] = useState(false);
 
   const liveBySession = new Map<string, LiveInfo>(Object.values(lives).map((l) => [l.sessionId, l]));
+
+  // AI 作答完成未读提醒（红点机制）
+  const [unreadCompleted, setUnreadCompleted] = useState<Set<string>>(() => new Set());
+  const prevLiveStatusRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    const prev = prevLiveStatusRef.current;
+    const next = new Map<string, string>();
+    const newUnread = new Set(unreadCompleted);
+    let changed = false;
+
+    liveBySession.forEach((live, id) => {
+      const currentStatus = live.status;
+      next.set(id, currentStatus);
+      const prevStatus = prev.get(id);
+
+      // 从 running 变为非 running（作答完成），且用户当前没有聚焦在该会话 -> 亮红点
+      if (prevStatus === 'running' && currentStatus !== 'running' && view?.sessionId !== id) {
+        newUnread.add(id);
+        changed = true;
+      }
+    });
+
+    // 用户正在查看的活跃会话，自动消除红点
+    if (view?.sessionId && newUnread.has(view.sessionId)) {
+      newUnread.delete(view.sessionId);
+      changed = true;
+    }
+
+    prevLiveStatusRef.current = next;
+    if (changed) {
+      setUnreadCompleted(newUnread);
+    }
+  }, [liveBySession, view?.sessionId]);
 
   return (
     <aside className="flex w-72 shrink-0 flex-col border-r border-line bg-side">
@@ -91,7 +139,61 @@ export function Sidebar() {
         </button>
       </div>
 
+      {/* 独立任务沙箱分区 */}
       <div className="mt-4 flex items-center justify-between px-4 pb-1">
+        <button
+          className="group/tlabel flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted transition-colors hover:text-fg"
+          onClick={toggleTasksCollapsed}
+        >
+          {tasksCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+          <span>任务</span>
+          {taskItems.length > 0 && (
+            <span className="rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold text-accent">
+              {taskItems.length}
+            </span>
+          )}
+        </button>
+        <button
+          className={iconBtn}
+          title="新建独立任务（沙箱隔离）"
+          onClick={() => void createInstantTask()}
+        >
+          <Plus size={15} />
+        </button>
+      </div>
+
+      {!tasksCollapsed && (
+        <div className="mb-2 space-y-0.5 px-2">
+          {taskItems.length === 0 ? (
+            <div className="px-3 py-1.5 text-xs text-muted">暂无任务，点右侧 + 创建独立沙箱</div>
+          ) : (
+            taskItems.map((item) => {
+              const active = !!view && samePath(view.cwd, item.cwd) && (
+                !item.sessionId || view.sessionId === item.sessionId
+              );
+              const live = (item.sessionId ? liveBySession.get(item.sessionId) : undefined)
+                || Object.values(lives).find((l) => samePath(l.cwd, item.cwd) && l.status !== 'closed');
+              const hasUnread = item.sessionId ? unreadCompleted.has(item.sessionId) : false;
+
+              return (
+                <SessionRow
+                  key={item.taskId}
+                  session={item.session}
+                  title={item.title}
+                  time={item.time}
+                  active={active}
+                  live={live}
+                  hasUnread={hasUnread}
+                  onDeleteTask={() => removeTask(item.taskId)}
+                  onClick={() => openSession(item.cwd, item.sessionId)}
+                />
+              );
+            })
+          )}
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center justify-between px-4 pb-1">
         <span className="text-xs font-medium tracking-wide text-muted">工作区</span>
         <div className="flex items-center">
           <button className={iconBtn} title="搜索会话（Ctrl+K）" onClick={openSearch}>
@@ -156,13 +258,21 @@ export function Sidebar() {
               activeSessionId={view && samePath(view.cwd, f.cwd) ? view.sessionId : undefined}
               blankHere={!!view && samePath(view.cwd, f.cwd) && !view.sessionId}
               liveBySession={liveBySession}
+              unreadCompleted={unreadCompleted}
             />
           ))
         )}
       </nav>
 
-      <div className="flex h-12 shrink-0 items-center border-t border-line px-3">
+      <div className="flex h-12 shrink-0 items-center justify-between border-t border-line px-3">
         <ThemeToggle />
+        <button
+          className={iconBtn}
+          title="设置（模型切换 / 检查更新）"
+          onClick={openSettings}
+        >
+          <SettingsIcon size={16} />
+        </button>
       </div>
     </aside>
   );
@@ -174,28 +284,57 @@ function FolderNode(props: {
   activeSessionId: string | null | undefined;
   blankHere: boolean;
   liveBySession: Map<string, LiveInfo>;
+  unreadCompleted: Set<string>;
 }) {
-  const { folder, open, activeSessionId, blankHere, liveBySession } = props;
+  const { folder, open, activeSessionId, blankHere, liveBySession, unreadCompleted } = props;
   const [limit, setLimit] = useState(PAGE);
+  const [isDragOver, setIsDragOver] = useState(false);
   // A session that's open but not yet on disk (its first reply is still coming).
   const unsaved = !!activeSessionId && !folder.sessions.some((s) => s.sessionId === activeSessionId);
   const shown = folder.sessions.slice(0, limit);
   const busy = folder.sessions.some((s) => liveBySession.get(s.sessionId)?.status === 'running');
+  const isTask = isTaskPath(folder.cwd);
+  const displayName = isTask ? projectTitle(folder.cwd) : baseName(folder.cwd);
 
   return (
-    <div className="mb-1">
-      <div className="group flex h-9 items-center rounded-lg pr-1 transition-colors hover:bg-sunken/70">
+    <div
+      className={`mb-1 transition-all ${isDragOver ? 'border-t-2 border-accent pt-0.5' : ''}`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        setIsDragOver(true);
+      }}
+      onDragLeave={() => setIsDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setIsDragOver(false);
+        const fromCwd = e.dataTransfer.getData('text/plain');
+        if (fromCwd && !samePath(fromCwd, folder.cwd)) {
+          reorderFolders(fromCwd, folder.cwd);
+        }
+      }}
+    >
+      <div
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('text/plain', folder.cwd);
+          e.dataTransfer.effectAllowed = 'move';
+        }}
+        className="group flex h-9 cursor-grab active:cursor-grabbing items-center rounded-lg pr-1 transition-colors hover:bg-sunken/70"
+      >
         <button
           className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2 text-left"
           title={folder.cwd}
           onClick={() => toggleCollapsed(folder.cwd)}
         >
-          {open ? (
+          {isTask ? (
+            <ListTodo size={17} className="shrink-0 text-accent" />
+          ) : open ? (
             <FolderOpen size={17} className="shrink-0 text-accent" />
           ) : (
             <FolderIcon size={17} className="shrink-0 text-accent" />
           )}
-          <span className="truncate text-sm font-medium text-fg/90">{baseName(folder.cwd)}</span>
+          <span className="truncate text-sm font-medium text-fg/90">{displayName}</span>
           {busy && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />}
         </button>
         <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100">
@@ -215,9 +354,23 @@ function FolderNode(props: {
                 <MenuRow icon={SquarePen} onClick={() => (newChat(folder.cwd), close())}>
                   新建会话
                 </MenuRow>
-                <MenuRow icon={EyeOff} onClick={() => (hideProject(folder.cwd), close())}>
-                  从列表中隐藏
-                </MenuRow>
+                {isTask ? (
+                  <MenuRow
+                    icon={Trash}
+                    danger
+                    onClick={() => {
+                      const id = extractTaskId(folder.cwd);
+                      if (id) void removeTask(id);
+                      close();
+                    }}
+                  >
+                    删除任务沙箱
+                  </MenuRow>
+                ) : (
+                  <MenuRow icon={EyeOff} onClick={() => (hideProject(folder.cwd), close())}>
+                    从列表中隐藏
+                  </MenuRow>
+                )}
               </>
             )}
           </Dropdown>
@@ -240,6 +393,7 @@ function FolderNode(props: {
               time={s.lastModified}
               active={activeSessionId === s.sessionId}
               live={liveBySession.get(s.sessionId)}
+              hasUnread={unreadCompleted.has(s.sessionId)}
               onClick={() => openSession(folder.cwd, s.sessionId)}
             />
           ))}
@@ -265,9 +419,11 @@ function SessionRow(props: {
   time?: number;
   active: boolean;
   live?: LiveInfo;
+  hasUnread?: boolean;
+  onDeleteTask?: () => void;
   onClick?: () => void;
 }) {
-  const { session, title, time, active, live, onClick } = props;
+  const { session, title, time, active, live, hasUnread, onDeleteTask, onClick } = props;
   const [mode, setMode] = useState<RowMode>(null);
   const status = live?.status;
 
@@ -287,19 +443,22 @@ function SessionRow(props: {
     );
   }
 
-  if (session && mode === 'delete') {
+  if (mode === 'delete') {
     return (
       <div className="mx-1 space-y-2 rounded-xl border border-red-500/35 bg-red-500/5 px-3 py-2.5">
         <div className="text-sm">
-          删除「<span className="font-medium">{title}</span>」？
-          <div className="text-xs text-muted">会删除磁盘上的对话记录，无法恢复。</div>
+          删除{onDeleteTask ? '任务' : ''}「<span className="font-medium">{title}</span>」？
+          <div className="text-xs text-muted">
+            {onDeleteTask ? '会彻底删除该任务的专属物理沙箱目录及对话记录，无法恢复。' : '会删除磁盘上的对话记录，无法恢复。'}
+          </div>
         </div>
         <div className="flex gap-1.5">
           <button
             className="rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white shadow-sm transition-colors hover:bg-red-700"
             onClick={() => {
               setMode(null);
-              void deleteSession(session.sessionId);
+              if (onDeleteTask) onDeleteTask();
+              else if (session) void deleteSession(session.sessionId);
             }}
           >
             删除
@@ -317,7 +476,7 @@ function SessionRow(props: {
       role="button"
       tabIndex={0}
       data-session={session?.sessionId}
-      className={`group flex h-9 cursor-pointer items-center gap-2 rounded-lg pr-1 pl-9 transition-colors ${
+      className={`group flex h-9 cursor-pointer items-center gap-2 rounded-lg pr-1 pl-6 transition-colors ${
         active
           ? 'bg-panel font-medium text-fg shadow-card ring-1 ring-line/70 dark:bg-sunken dark:ring-transparent'
           : 'text-fg/85 hover:bg-sunken/70'
@@ -325,6 +484,13 @@ function SessionRow(props: {
       onClick={onClick}
       onKeyDown={(e) => e.key === 'Enter' && onClick?.()}
     >
+      {/* 名字左侧动态指示：思考/运行时展示 WebUI 同款星芒旋转动效，等待确认时展示琥珀色指示 */}
+      {status === 'running' ? (
+        <ClaudeMark size={14} className="spark-working shrink-0 text-accent" />
+      ) : status === 'waiting' ? (
+        <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500 animate-pulse" title="等待你确认" />
+      ) : null}
+
       <span className="min-w-0 flex-1 truncate text-sm" title={title}>
         {title}
       </span>
@@ -333,16 +499,17 @@ function SessionRow(props: {
           {session.tag}
         </span>
       )}
-      {(status === 'running' || status === 'waiting') && (
+      {/* AI 作答完成未读提醒红点 */}
+      {hasUnread && !active && (
         <span
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${status === 'waiting' ? 'bg-amber-500' : 'animate-pulse bg-accent'}`}
-          title={status === 'waiting' ? '等待你确认' : '运行中'}
+          className="h-2 w-2 shrink-0 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.7)] animate-pulse"
+          title="AI 作答完成"
         />
       )}
       {time !== undefined && (
-        <span className={`shrink-0 text-[0.6875rem] font-normal tabular-nums text-faint ${session ? 'group-hover:hidden' : ''}`}>{shortTime(time)}</span>
+        <span className={`shrink-0 text-[0.6875rem] font-normal tabular-nums text-faint ${session || onDeleteTask ? 'group-hover:hidden' : ''}`}>{shortTime(time)}</span>
       )}
-      {session && (
+      {(session || onDeleteTask) && (
         <div className="hidden shrink-0 group-hover:block" onClick={(e) => e.stopPropagation()}>
           <Dropdown
             placement="bottom"
@@ -354,18 +521,22 @@ function SessionRow(props: {
           >
             {(close) => (
               <>
-                <MenuRow icon={Pencil} onClick={() => (close(), setMode('rename'))}>
-                  重命名
-                </MenuRow>
-                <MenuRow icon={Tag} onClick={() => (close(), setMode('tag'))}>
-                  {session.tag ? '修改标签' : '添加标签'}
-                </MenuRow>
-                <MenuRow icon={GitFork} onClick={() => (close(), void forkSession(session.sessionId))}>
-                  复制为新分支
-                </MenuRow>
-                <div className="my-1 border-t border-line" />
+                {session && (
+                  <>
+                    <MenuRow icon={Pencil} onClick={() => (close(), setMode('rename'))}>
+                      重命名
+                    </MenuRow>
+                    <MenuRow icon={Tag} onClick={() => (close(), setMode('tag'))}>
+                      {session.tag ? '修改标签' : '添加标签'}
+                    </MenuRow>
+                    <MenuRow icon={GitFork} onClick={() => (close(), void forkSession(session.sessionId))}>
+                      复制为新分支
+                    </MenuRow>
+                    <div className="my-1 border-t border-line" />
+                  </>
+                )}
                 <MenuRow icon={Trash} danger onClick={() => (close(), setMode('delete'))}>
-                  删除
+                  {onDeleteTask ? '删除任务' : '删除'}
                 </MenuRow>
               </>
             )}

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.ts --dev",
-    "start": "node src/index.ts",
+    "start": "node --watch src/index.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {

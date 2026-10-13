@@ -8,15 +8,40 @@ import type { LiveManager } from './live.ts';
 import { cancelPick, pickFolder } from './picker.ts';
 import { claudeCodeVersion, installPlugin, pluginCatalog, setPluginEnabled, uninstallPlugin, updateMarketplaces } from './plugins.ts';
 import { searchSessions } from './search.ts';
-import type { Meta, PluginActionResult } from '../../shared/protocol.ts';
+import { createTask, deleteTask, getTasksRoot, listTasks } from './tasks.ts';
+import type { Meta, PluginActionResult, TaskInfo } from '../../shared/protocol.ts';
 
 export function createApi(manager: LiveManager, version: string): Hono {
   const api = new Hono();
   const ccVersion = claudeCodeVersion();
 
   api.get('/meta', async (c) =>
-    c.json<Meta>({ version, claudeCodeVersion: await ccVersion, home: homedir(), platform: process.platform }),
+    c.json<Meta>({
+      version,
+      claudeCodeVersion: await ccVersion,
+      home: homedir(),
+      platform: process.platform,
+      tasksDir: getTasksRoot(),
+    }),
   );
+
+  /** Task sandbox endpoints */
+  api.get('/tasks', async (c) => c.json<TaskInfo[]>(await listTasks()));
+
+  api.post('/tasks', async (c) => {
+    const body = await c.req.json<{ title?: string }>().catch(() => ({ title: undefined }));
+    const task = await createTask(body.title);
+    return c.json<TaskInfo>(task);
+  });
+
+  api.delete('/tasks/:id', async (c) => {
+    try {
+      await deleteTask(c.req.param('id'), manager);
+      return c.json({ ok: true });
+    } catch (err) {
+      return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+  });
 
   /** Sessions of one project (`dir`), or of every project when `dir` is omitted; newest first. */
   api.get('/sessions', async (c) => {
@@ -24,6 +49,28 @@ export function createApi(manager: LiveManager, version: string): Hono {
     const limit = Number(c.req.query('limit') ?? 1000);
     const offset = Number(c.req.query('offset') ?? 0);
     const sessions = await listSessions({ dir, limit, offset, includeProgrammatic: true });
+
+    // 全局扫描时，补充对所有任务沙箱目录的显式扫描，防止 SDK 全局扫描时漏掉首问为图片/富文本的任务会话
+    if (!dir) {
+      try {
+        const tasks = await listTasks();
+        const taskSessions = (
+          await Promise.all(
+            tasks.map((t) => listSessions({ dir: t.cwd, includeProgrammatic: true }).catch(() => []))
+          )
+        ).flat();
+
+        const knownIds = new Set(sessions.map((s) => s.sessionId));
+        for (const ts of taskSessions) {
+          if (!knownIds.has(ts.sessionId) && ts.cwd) {
+            sessions.push(ts);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     return c.json(sessions.filter((s) => s.cwd));
   });
 

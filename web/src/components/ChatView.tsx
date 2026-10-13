@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { Check, ChevronDown, FolderOpen, FolderPlus, LoaderCircle, PanelLeftOpen, SquarePen, WifiOff, X } from 'lucide-react';
+import { Check, ChevronDown, FolderOpen, FolderPlus, ListTodo, LoaderCircle, PanelLeftOpen, SquarePen, WifiOff, X } from 'lucide-react';
 import type { LiveInfo } from '../../../shared/protocol.ts';
 import { buildItems, type Item } from '../lib/transcript.ts';
 import { baseName, cliDuration, cliTokens, SPINNER_VERBS, STATUS_LABELS, thinkingPhrase } from '../lib/format.ts';
@@ -7,7 +7,9 @@ import {
   addProject,
   currentMode,
   dismissNotice,
+  extractTaskId,
   isBlankChat,
+  isTaskPath,
   newChat,
   openSession,
   samePath,
@@ -22,6 +24,7 @@ import { OpenFolder } from './OpenFolder.tsx';
 import { PermissionPanel } from './PermissionPanel.tsx';
 import { sessionTitle } from './Sidebar.tsx';
 import { DraftView, ItemList } from './Transcript.tsx';
+import { TurnNavigator } from './TurnNavigator.tsx';
 
 export function ChatView() {
   const blank = useStore((s) => isBlankChat(s));
@@ -96,6 +99,19 @@ function ProjectPicker() {
   const cwd = useStore((s) => s.view?.cwd ?? null);
   const options = useProjectOptions();
   const [opening, setOpening] = useState(false);
+
+  if (isTaskPath(cwd)) {
+    const taskNum = extractTaskId(cwd)?.replace(/^task-/, '') || '';
+    return (
+      <div
+        className="flex h-8 items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/10 px-2.5 text-xs font-semibold text-accent-strong"
+        title={cwd ?? undefined}
+      >
+        <ListTodo size={14} className="shrink-0" />
+        <span>任务沙箱 #{taskNum} · 独立环境</span>
+      </div>
+    );
+  }
 
   return (
     <Dropdown
@@ -193,9 +209,19 @@ function Conversation() {
       <header className="flex h-14 shrink-0 items-center gap-3 px-4">
         <SidebarReopen />
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="flex shrink-0 items-center gap-1.5 text-sm text-muted">
-            <FolderOpen size={15} className="text-accent/80" /> {baseName(view.cwd)}
-          </span>
+          {isTaskPath(view.cwd) ? (
+            <span
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-accent/25 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent-strong"
+              title={view.cwd}
+            >
+              <ListTodo size={13} className="shrink-0" />
+              任务沙箱 #{extractTaskId(view.cwd)?.replace(/^task-/, '')}
+            </span>
+          ) : (
+            <span className="flex shrink-0 items-center gap-1.5 text-sm text-muted">
+              <FolderOpen size={15} className="text-accent/80" /> {baseName(view.cwd)}
+            </span>
+          )}
           {title && (
             <>
               <span className="text-faint">/</span>
@@ -203,32 +229,35 @@ function Conversation() {
             </>
           )}
         </div>
-        {conn !== 'open' && <ConnBadge conn={conn} />}
-        {status !== 'idle' && (
-          <span
-            className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              status === 'waiting'
-                ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
-                : status === 'running'
-                  ? 'bg-accent/15 text-accent-strong'
-                  : 'bg-sunken text-muted'
-            }`}
-          >
-            {status !== 'closed' && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />}
-            {STATUS_LABELS[status]}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          <RunningSessionsWidget />
+          {conn !== 'open' && <ConnBadge conn={conn} />}
+          {status !== 'idle' && (
+            <span
+              className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                status === 'waiting'
+                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                  : status === 'running'
+                    ? 'bg-accent/15 text-accent-strong'
+                    : 'bg-sunken text-muted'
+              }`}
+            >
+              {status !== 'closed' && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />}
+              {STATUS_LABELS[status]}
+            </span>
+          )}
+        </div>
       </header>
 
       <div
         ref={scroller}
-        className="scroll-thin flex-1 overflow-y-auto"
+        className="scroll-thin flex-1 overflow-y-auto overflow-x-hidden min-w-0 w-full"
         onScroll={(e) => {
           const el = e.currentTarget;
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
         }}
       >
-        <div className="mx-auto max-w-[46rem] space-y-3 px-5 pt-2 pb-6">
+        <div className="mx-auto w-full max-w-[46rem] min-w-0 space-y-3 px-5 pt-2 pb-6">
           {loading && entries.length === 0 ? (
             <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted">
               <LoaderCircle size={16} className="animate-spin" /> 正在加载会话…
@@ -241,13 +270,15 @@ function Conversation() {
         </div>
       </div>
 
+      {/* 类似 DSH 的对话大纲导航栏（珊瑚橙配色，浮于右侧，支持悬停预览与平滑滚动） */}
+      <TurnNavigator scrollerRef={scroller} items={items} />
+
       <div className="relative mx-auto w-full max-w-[46rem] space-y-2 px-5 pb-5">
         <div className="pointer-events-none absolute inset-x-0 -top-6 h-6 bg-linear-to-t from-bg to-transparent" />
         {notice && <Notice text={notice} />}
         {live?.status === 'closed' && (
           <div className="text-center text-xs text-muted">Claude Code 进程已结束，发送消息会自动恢复这个会话。</div>
         )}
-        <BypassBanner />
         {pending.length > 0 && <PermissionPanel key={pending[0].requestId} request={pending[0]} queued={pending.length - 1} />}
         <Composer />
       </div>
@@ -307,14 +338,116 @@ function activeTodo(items: Item[]): string | undefined {
   return undefined;
 }
 
-function BypassBanner() {
-  const on = useStore((s) => currentMode(s) === 'bypassPermissions');
-  if (!on) return null;
+/** 顶栏右上角正在运行会话徽标与下拉快速切换 */
+function RunningSessionsWidget() {
+  const lives = useStore((s) => s.lives);
+  const sessions = useStore((s) => s.sessions);
+  const currentSessionId = useStore((s) => s.view?.sessionId);
+  const runningDisplayMode = useStore((s) => s.runningDisplayMode);
+
+  const runningList = useMemo(() => {
+    const list: { sessionId: string; cwd?: string; title: string; status: string }[] = [];
+    Object.values(lives).forEach((l) => {
+      if (l.status === 'running' || l.status === 'waiting') {
+        const s = sessions?.find((item) => item.sessionId === l.sessionId);
+        list.push({
+          sessionId: l.sessionId,
+          cwd: s?.cwd,
+          title: s ? sessionTitle(s) : '正在运行的会话',
+          status: l.status,
+        });
+      }
+    });
+    return list;
+  }, [lives, sessions]);
+
+  if (runningList.length === 0) return null;
+
+  // 1. 直接平铺显示模式（默认）：直接在顶栏展示各个运行中会话的胶囊标签，免点击直接切换！
+  if (runningDisplayMode === 'chips') {
+    return (
+      <div className="flex items-center gap-1.5 max-w-[calc(100vw-36rem)] overflow-x-auto scroll-thin py-0.5">
+        {runningList.map((r) => {
+          const isCurrent = r.sessionId === currentSessionId;
+          return (
+            <button
+              key={r.sessionId}
+              type="button"
+              className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-all active:scale-95 ${
+                isCurrent
+                  ? 'border-accent/40 bg-accent/20 font-semibold text-accent-strong shadow-xs'
+                  : 'border-accent/25 bg-accent/10 font-medium text-accent-strong hover:bg-accent/15 cursor-pointer'
+              }`}
+              onClick={() => {
+                if (r.cwd) openSession(r.cwd, r.sessionId);
+              }}
+              title={`正在运行：${r.title}${r.cwd ? ` (${baseName(r.cwd)})` : ''}`}
+            >
+              <ClaudeMark size={13} className="spark-working shrink-0 text-accent" />
+              <span className="truncate max-w-32">{r.title}</span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // 2. 紧凑折叠模式：显示「正在运行 (N)」并下拉
   return (
-    <div className="mb-2 rounded-xl border border-red-500/25 bg-red-500/8 px-3 py-1.5 text-xs text-red-700 dark:text-red-300">
-      完全权限已开启：Claude 会直接修改文件、执行命令，不再询问。只在你信任的项目里使用。
-    </div>
+    <Dropdown
+      placement="bottom"
+      align="right"
+      className="flex items-center gap-1.5 rounded-full bg-accent/15 px-2.5 py-1 text-xs font-semibold text-accent-strong transition-all hover:bg-accent/25 active:scale-95 shadow-sm"
+      title="正在运行的会话"
+      panelClassName="w-72 p-1.5 text-sm"
+      trigger={() => (
+        <>
+          <ClaudeMark size={14} className="spark-working text-accent shrink-0" />
+          <span>正在运行 ({runningList.length})</span>
+        </>
+      )}
+    >
+      {(close) => (
+        <div className="space-y-1">
+          <div className="px-2 pt-1 pb-1 text-[0.6875rem] font-semibold text-muted uppercase">
+            后台运行中 ({runningList.length})
+          </div>
+          {runningList.map((r) => {
+            const isCurrent = r.sessionId === currentSessionId;
+            return (
+              <div
+                key={r.sessionId}
+                role="button"
+                tabIndex={0}
+                className={`flex cursor-pointer items-center justify-between rounded-lg p-2 text-xs transition-colors ${
+                  isCurrent ? 'bg-accent/10 font-semibold text-accent-strong' : 'text-fg hover:bg-sunken'
+                }`}
+                onClick={() => {
+                  if (r.cwd) openSession(r.cwd, r.sessionId);
+                  close();
+                }}
+              >
+                <div className="flex items-center gap-2 min-w-0 pr-2">
+                  <ClaudeMark size={12} className="spark-working text-accent shrink-0" />
+                  <div className="min-w-0">
+                    <div className="truncate">{r.title}</div>
+                    {r.cwd && <div className="truncate text-[0.6875rem] text-muted">{baseName(r.cwd)}</div>}
+                  </div>
+                </div>
+                <span className="text-[0.6875rem] text-accent shrink-0 font-medium">
+                  {isCurrent ? '当前会话' : '点击切换'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Dropdown>
   );
+}
+
+function BypassBanner() {
+  return null;
 }
 
 function ConnBadge({ conn }: { conn: string }) {

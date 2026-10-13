@@ -113,6 +113,16 @@ export interface Meta {
   claudeCodeVersion: string | null;
   home: string;
   platform: string;
+  tasksDir?: string;
+}
+
+export interface TaskInfo {
+  taskId: string;
+  cwd: string;
+  createdAt: number;
+  title?: string;
+  sessionId?: string;
+  lastModified?: number;
 }
 
 /**

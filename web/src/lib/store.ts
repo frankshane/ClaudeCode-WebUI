@@ -12,10 +12,11 @@ import type {
   PermissionRequest,
   SDKSessionInfo,
   ServerMsg,
+  TaskInfo,
   TranscriptEntry,
 } from '../../../shared/protocol.ts';
 import { api, getToken } from './api.ts';
-import { ALL_EFFORTS } from './format.ts';
+import { ALL_EFFORTS, baseName } from './format.ts';
 import { Connection, type ConnStatus } from './ws.ts';
 
 /** Assistant output currently streaming in, before its final message arrives. */
@@ -72,6 +73,9 @@ interface AppState {
   prefs: Prefs;
   notice: string | null;
   meta: Meta | null;
+  /** Task sandbox directories. */
+  tasks: TaskInfo[] | null;
+  tasksCollapsed: boolean;
   /** Sessions of every project, newest first; null until the first load. */
   sessions: SDKSessionInfo[] | null;
   /** Bumped whenever session data changed on disk. */
@@ -84,9 +88,13 @@ interface AppState {
   hiddenProjects: string[];
   /** Folders collapsed in the sidebar tree. */
   collapsed: string[];
+  /** Custom user-dragged folder order (list of cwds). */
+  customFolderOrder: string[];
   sortBy: SortBy;
   sidebarOpen: boolean;
   searchOpen: boolean;
+  settingsOpen: boolean;
+  runningDisplayMode: 'chips' | 'dropdown';
   /** Text to drop into the composer (nonce makes repeated prefills distinct). */
   prefill: { text: string; nonce: number } | null;
   turn: TurnProgress;
@@ -98,6 +106,8 @@ const EXTRA_KEY = 'ccwebui.extraProjects';
 const OPENED_KEY = 'ccwebui.projectOpenedAt';
 const HIDDEN_KEY = 'ccwebui.hiddenProjects';
 const COLLAPSED_KEY = 'ccwebui.collapsed';
+const FOLDER_ORDER_KEY = 'ccwebui.folderOrder';
+const TASKS_COLLAPSED_KEY = 'ccwebui.tasksCollapsed';
 const UI_KEY = 'ccwebui.ui';
 
 function loadList(key: string): string[] {
@@ -119,7 +129,11 @@ function loadJson<T>(key: string, fallback: T): T {
 }
 
 const savedView = loadJson<{ cwd: string | null; sessionId: string | null }>(VIEW_KEY, { cwd: null, sessionId: null });
-const savedUi = loadJson<{ sortBy: SortBy; sidebarOpen: boolean }>(UI_KEY, { sortBy: 'recent', sidebarOpen: true });
+const savedUi = loadJson<{ sortBy: SortBy; sidebarOpen: boolean; runningDisplayMode?: 'chips' | 'dropdown' }>(UI_KEY, {
+  sortBy: 'recent',
+  sidebarOpen: true,
+  runningDisplayMode: 'chips',
+});
 const savedPrefs = loadJson<Prefs>(PREFS_KEY, { model: null, effort: null, permissionMode: 'default' });
 // Auto mode is no longer offered (see PICKER_MODES); a saved choice of it falls back to asking.
 if (savedPrefs.permissionMode === 'auto') savedPrefs.permissionMode = 'default';
@@ -139,15 +153,20 @@ export const useStore = create<AppState>(() => ({
   prefs: savedPrefs,
   notice: null,
   meta: null,
+  tasks: null,
+  tasksCollapsed: localStorage.getItem(TASKS_COLLAPSED_KEY) === 'true',
   sessions: null,
   sessionsVersion: 0,
   extraProjects: loadList(EXTRA_KEY),
   projectOpenedAt: loadJson<Record<string, number>>(OPENED_KEY, {}),
   hiddenProjects: loadList(HIDDEN_KEY),
   collapsed: loadList(COLLAPSED_KEY),
+  customFolderOrder: loadList(FOLDER_ORDER_KEY),
   sortBy: savedUi.sortBy,
   sidebarOpen: savedUi.sidebarOpen,
   searchOpen: false,
+  settingsOpen: false,
+  runningDisplayMode: savedUi.runningDisplayMode ?? 'chips',
   prefill: null,
   turn: { chars: 0, thinkingSince: null, thought: null },
 }));
@@ -178,6 +197,7 @@ export function connect(): void {
   // The start page is always a fresh chat (the centered composer) in the last project.
   if (savedView.cwd) openSession(savedView.cwd, null);
   void refreshSessions();
+  void refreshTasks();
   api<Meta>('/meta').then((meta) => set({ meta }), () => {});
 }
 
@@ -196,6 +216,7 @@ export async function refreshSessions(): Promise<void> {
 function sessionsChanged(): void {
   set((s) => ({ sessionsVersion: s.sessionsVersion + 1 }));
   void refreshSessions();
+  void refreshTasks();
 }
 
 function send(msg: Parameters<Connection['send']>[0]): void {
@@ -237,8 +258,13 @@ function saveList(key: string, list: string[]): void {
 }
 
 function saveUi(): void {
-  const { sortBy, sidebarOpen } = get();
-  localStorage.setItem(UI_KEY, JSON.stringify({ sortBy, sidebarOpen }));
+  const { sortBy, sidebarOpen, runningDisplayMode } = get();
+  localStorage.setItem(UI_KEY, JSON.stringify({ sortBy, sidebarOpen, runningDisplayMode }));
+}
+
+export function setRunningDisplayMode(mode: 'chips' | 'dropdown'): void {
+  set({ runningDisplayMode: mode });
+  saveUi();
 }
 
 /**
@@ -275,6 +301,7 @@ export function hideProject(path: string): void {
     hidden: hiddenProjects,
     sortBy: s.sortBy,
     viewCwd: null,
+    customFolderOrder: s.customFolderOrder,
   });
   if (next) {
     openSession(next.cwd, null);
@@ -331,6 +358,56 @@ export function closeSearch(): void {
   set({ searchOpen: false });
 }
 
+export function openSettings(): void {
+  set({ settingsOpen: true });
+}
+
+export function closeSettings(): void {
+  set({ settingsOpen: false });
+}
+
+/** 拖拽排序工作区：将 fromCwd 移动到 toCwd 的位置，并持久化到 localStorage */
+export function reorderFolders(fromCwd: string, toCwd: string): void {
+  if (samePath(fromCwd, toCwd)) return;
+  const { customFolderOrder, extraProjects, sessions } = get();
+  const allCwds: string[] = [];
+  const seen = new Set<string>();
+
+  for (const p of customFolderOrder) {
+    const k = folderKey(p);
+    if (!seen.has(k)) {
+      seen.add(k);
+      allCwds.push(p);
+    }
+  }
+  for (const p of extraProjects) {
+    const k = folderKey(p);
+    if (!seen.has(k)) {
+      seen.add(k);
+      allCwds.push(p);
+    }
+  }
+  for (const s of sessions ?? []) {
+    if (s.cwd) {
+      const k = folderKey(s.cwd);
+      if (!seen.has(k)) {
+        seen.add(k);
+        allCwds.push(s.cwd);
+      }
+    }
+  }
+
+  const fromIdx = allCwds.findIndex((p) => samePath(p, fromCwd));
+  const toIdx = allCwds.findIndex((p) => samePath(p, toCwd));
+  if (fromIdx === -1 || toIdx === -1) return;
+
+  const [moved] = allCwds.splice(fromIdx, 1);
+  allCwds.splice(toIdx, 0, moved);
+
+  set({ customFolderOrder: allCwds });
+  localStorage.setItem(FOLDER_ORDER_KEY, JSON.stringify(allCwds));
+}
+
 export interface Folder {
   cwd: string;
   sessions: SDKSessionInfo[];
@@ -350,6 +427,42 @@ export function samePath(a: string | null | undefined, b: string | null | undefi
   return !!a && !!b && folderKey(a) === folderKey(b);
 }
 
+/** Check if a path belongs to the task sandbox directory */
+export function isTaskPath(path: string | null | undefined): boolean {
+  if (!path) return false;
+  const tasksDir = get().meta?.tasksDir;
+  if (tasksDir && folderKey(path).startsWith(folderKey(tasksDir))) return true;
+  return /([\\/]\.ccwebui[\\/]tasks([\\/]|$))/i.test(path);
+}
+
+/** Extract task ID (e.g. task-1) from a directory path */
+export function extractTaskId(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const normalized = path.replace(/\\/g, '/');
+  const m = normalized.match(/\/tasks\/([^/]+)/i);
+  return m ? m[1] : null;
+}
+
+/** Human-friendly project label (formats task sandboxes as "任务 #1") */
+export function projectTitle(cwd: string): string {
+  if (isTaskPath(cwd)) {
+    const id = extractTaskId(cwd);
+    const num = id ? id.replace(/^task-/, '') : '';
+    return num ? `任务 #${num}` : '任务沙箱';
+  }
+  return baseName(cwd);
+}
+
+export interface TaskRowItem {
+  taskId: string;
+  cwd: string;
+  taskNumber: string;
+  title: string;
+  time?: number;
+  session?: SDKSessionInfo;
+  sessionId: string | null;
+}
+
 interface FolderInputs {
   sessions: SDKSessionInfo[] | null;
   extra: string[];
@@ -357,10 +470,11 @@ interface FolderInputs {
   hidden: string[];
   sortBy: SortBy;
   viewCwd: string | null;
+  customFolderOrder?: string[];
 }
 
 /** Visible folders with their sessions, in the chosen order. */
-function buildFolders({ sessions, extra, openedAt, hidden, sortBy, viewCwd }: FolderInputs): Folder[] {
+function buildFolders({ sessions, extra, openedAt, hidden, sortBy, viewCwd, customFolderOrder }: FolderInputs): Folder[] {
   const byKey = new Map<string, Folder>();
   // The first spelling seen wins for display; sessions come first so it's Claude Code's.
   const folder = (cwd: string) => {
@@ -370,19 +484,37 @@ function buildFolders({ sessions, extra, openedAt, hidden, sortBy, viewCwd }: Fo
     return f;
   };
   for (const s of sessions ?? []) {
+    if (isTaskPath(s.cwd)) continue; // 任务归入专属任务栏，不污染工作区
     const f = folder(s.cwd!);
     f.sessions.push(s);
     f.lastActivity = Math.max(f.lastActivity, s.lastModified);
   }
   // Opening a folder counts as activity, so a freshly opened one sits at the top even before it has sessions.
   for (const p of extra) {
+    if (isTaskPath(p)) continue;
     const f = folder(p);
     f.lastActivity = Math.max(f.lastActivity, openedAt[folderKey(p)] ?? 0);
   }
-  // The folder you're working in always shows, even before its first session is saved.
-  if (viewCwd) folder(viewCwd).lastActivity = Math.max(folder(viewCwd).lastActivity, Date.now());
+  // 确保当前正在查看的工作区存在于列表中（如果它是空的），但绝不篡改它的 lastActivity，彻底杜绝点击时自动跳到最上方！
+  if (viewCwd && !isTaskPath(viewCwd)) {
+    folder(viewCwd);
+  }
   const hiddenKeys = new Set(hidden.map(folderKey));
   const list = [...byKey.values()].filter((f) => !hiddenKeys.has(folderKey(f.cwd)) || samePath(f.cwd, viewCwd));
+
+  // 1. 如果用户手动拖拽排序过工作区，按自定义拖拽顺序展示！
+  if (customFolderOrder && customFolderOrder.length > 0) {
+    const orderMap = new Map<string, number>();
+    customFolderOrder.forEach((p, idx) => orderMap.set(folderKey(p), idx));
+    return list.sort((a, b) => {
+      const idxA = orderMap.has(folderKey(a.cwd)) ? orderMap.get(folderKey(a.cwd))! : 99999;
+      const idxB = orderMap.has(folderKey(b.cwd)) ? orderMap.get(folderKey(b.cwd))! : 99999;
+      if (idxA !== idxB) return idxA - idxB;
+      return sortBy === 'name' ? a.cwd.localeCompare(b.cwd, 'zh-CN') : b.lastActivity - a.lastActivity;
+    });
+  }
+
+  // 2. 默认按名称或历史活跃度排序
   return list.sort((a, b) => (sortBy === 'name' ? a.cwd.localeCompare(b.cwd, 'zh-CN') : b.lastActivity - a.lastActivity));
 }
 
@@ -394,20 +526,105 @@ export function useFolders(): Folder[] {
   const hidden = useStore((s) => s.hiddenProjects);
   const sortBy = useStore((s) => s.sortBy);
   const viewCwd = useStore((s) => s.view?.cwd ?? null);
+  const customFolderOrder = useStore((s) => s.customFolderOrder);
   return useMemo(
-    () => buildFolders({ sessions, extra, openedAt, hidden, sortBy, viewCwd }),
-    [sessions, extra, openedAt, hidden, sortBy, viewCwd],
+    () => buildFolders({ sessions, extra, openedAt, hidden, sortBy, viewCwd, customFolderOrder }),
+    [sessions, extra, openedAt, hidden, sortBy, viewCwd, customFolderOrder],
   );
 }
 
-/** Project dirs for pickers: current first, then the tree's order. */
+/** Active and historical task sandbox items with their exact session bindings */
+export function useTaskItems(): TaskRowItem[] {
+  const tasks = useStore((s) => s.tasks);
+  const sessions = useStore((s) => s.sessions);
+  const lives = useStore((s) => s.lives);
+  const view = useStore((s) => s.view);
+
+  return useMemo(() => {
+    const items: TaskRowItem[] = [];
+    const taskList = tasks ?? [];
+
+    const sessionsByCwd = new Map<string, SDKSessionInfo[]>();
+    for (const s of sessions ?? []) {
+      if (!s.cwd) continue;
+      const k = folderKey(s.cwd);
+      let arr = sessionsByCwd.get(k);
+      if (!arr) sessionsByCwd.set(k, (arr = []));
+      arr.push(s);
+    }
+
+    const liveByCwd = new Map<string, LiveInfo[]>();
+    for (const l of Object.values(lives)) {
+      if (l.status === 'closed' || !l.cwd) continue;
+      const k = folderKey(l.cwd);
+      let arr = liveByCwd.get(k);
+      if (!arr) liveByCwd.set(k, (arr = []));
+      arr.push(l);
+    }
+
+    for (const t of taskList) {
+      const k = folderKey(t.cwd);
+      const taskSessions = sessionsByCwd.get(k) ?? [];
+      taskSessions.sort((a, b) => b.lastModified - a.lastModified);
+      const latestSession = taskSessions[0];
+
+      const liveList = liveByCwd.get(k) ?? [];
+      const activeLive = liveList[0];
+
+      let sessionId: string | null = t.sessionId ?? null;
+      let title = t.title || t.taskId;
+      let time: number | undefined = t.lastModified ?? t.createdAt;
+
+      if (latestSession) {
+        sessionId = latestSession.sessionId;
+        title = latestSession.customTitle || latestSession.summary || latestSession.firstPrompt || title;
+        time = latestSession.lastModified;
+      } else if (activeLive) {
+        sessionId = activeLive.sessionId;
+        if (!title || title.startsWith('task-')) title = '新任务';
+      } else if (view && samePath(view.cwd, t.cwd) && view.sessionId) {
+        sessionId = view.sessionId;
+      }
+
+      const taskNumber = t.taskId.replace(/^task-/, '');
+
+      items.push({
+        taskId: t.taskId,
+        cwd: t.cwd,
+        taskNumber,
+        title,
+        time,
+        session: latestSession,
+        sessionId,
+      });
+    }
+
+    if (view?.cwd && isTaskPath(view.cwd)) {
+      const id = extractTaskId(view.cwd);
+      if (id && !items.some((x) => x.taskId === id)) {
+        items.unshift({
+          taskId: id,
+          cwd: view.cwd,
+          taskNumber: id.replace(/^task-/, ''),
+          title: '新任务',
+          time: Date.now(),
+          sessionId: view.sessionId,
+        });
+      }
+    }
+
+    return items.sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
+  }, [tasks, sessions, lives, view]);
+}
+
+/** Project dirs for pickers: current first, then the tree's order (excluding tasks). */
 export function useProjectOptions(): string[] {
   const folders = useFolders();
   const viewCwd = useStore((s) => s.view?.cwd ?? null);
   return useMemo(() => {
     const out: string[] = [];
-    for (const p of [...(viewCwd ? [viewCwd] : []), ...folders.map((f) => f.cwd)]) {
-      if (!out.some((q) => samePath(p, q))) out.push(p);
+    for (const p of [...(viewCwd && !isTaskPath(viewCwd) ? [viewCwd] : []), ...folders.map((f) => f.cwd)]) {
+      if (!isTaskPath(p) && !out.some((q) => samePath(p, q))) out.push(p);
     }
     return out;
   }, [folders, viewCwd]);
@@ -630,6 +847,63 @@ export async function forkSession(sessionId: string, upToMessageId?: string): Pr
     fail('分叉')(err);
     return null;
   }
+}
+
+// ---- task sandbox actions ----
+
+export async function refreshTasks(): Promise<void> {
+  try {
+    const tasks = await api<TaskInfo[]>('/tasks');
+    set({ tasks });
+  } catch {
+    // ignore
+  }
+}
+
+export async function createInstantTask(title?: string): Promise<void> {
+  try {
+    const task = await api<TaskInfo>('/tasks', { method: 'POST', body: { title } });
+    addProject(task.cwd);
+    await refreshTasks();
+    openSession(task.cwd, null);
+    void refreshSessions();
+  } catch (err) {
+    fail('创建任务')(err);
+  }
+}
+
+export async function removeTask(taskId: string): Promise<void> {
+  try {
+    const { view, extraProjects } = get();
+    const isCurrent = !!(view?.cwd && extractTaskId(view.cwd) === taskId);
+    if (isCurrent) {
+      releaseView();
+    }
+    await api<{ ok: boolean }>(`/tasks/${taskId}`, { method: 'DELETE' });
+    const filteredExtra = extraProjects.filter((p) => extractTaskId(p) !== taskId);
+    set({ extraProjects: filteredExtra });
+    saveList(EXTRA_KEY, filteredExtra);
+    await refreshTasks();
+    await refreshSessions();
+
+    if (isCurrent) {
+      // 切换到安全的工作区项目，防止在已物理删除的沙箱目录中启动 Claude Code 导致进程崩溃
+      const nonTaskSession = get().sessions?.find((s) => s.cwd && !isTaskPath(s.cwd));
+      const nonTaskProject = filteredExtra.find((p) => !isTaskPath(p));
+      const fallbackTarget = nonTaskSession?.cwd ?? nonTaskProject ?? get().meta?.home;
+      if (fallbackTarget) {
+        openSession(fallbackTarget, null);
+      }
+    }
+  } catch (err) {
+    fail('删除任务')(err);
+  }
+}
+
+export function toggleTasksCollapsed(): void {
+  const next = !get().tasksCollapsed;
+  localStorage.setItem(TASKS_COLLAPSED_KEY, String(next));
+  set({ tasksCollapsed: next });
 }
 
 /**

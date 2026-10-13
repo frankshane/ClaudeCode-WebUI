@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Brain,
   ChevronDown,
@@ -21,12 +21,116 @@ import { duration, shortTokens } from '../lib/format.ts';
 import { DiffView } from './DiffView.tsx';
 import { Markdown } from './Markdown.tsx';
 
+type RenderBlock =
+  | { kind: 'single'; item: Item }
+  | { kind: 'tool-group'; key: string; items: Item[]; toolCount: number; toolNames: string[] };
+
+/** 将同一轮中连续调用的脚本工具和思考过程聚合为一个可收缩的分组 */
+function groupItems(items: Item[]): RenderBlock[] {
+  const blocks: RenderBlock[] = [];
+  let currentGroup: Item[] = [];
+
+  const flushGroup = () => {
+    if (currentGroup.length === 0) return;
+    const tools = currentGroup.filter((it) => it.kind === 'tool');
+    // 如果包含 2 个及以上的工具调用，聚合为一个折叠组
+    if (tools.length >= 2) {
+      const toolNames = Array.from(
+        new Set(
+          tools
+            .map((t) => (t.kind === 'tool' ? describeTool(t.tool.name, t.tool.input).label : ''))
+            .filter(Boolean),
+        ),
+      );
+      blocks.push({
+        kind: 'tool-group',
+        key: `group-${currentGroup[0].key}`,
+        items: [...currentGroup],
+        toolCount: tools.length,
+        toolNames,
+      });
+    } else {
+      for (const item of currentGroup) {
+        blocks.push({ kind: 'single', item });
+      }
+    }
+    currentGroup = [];
+  };
+
+  for (const item of items) {
+    if (item.kind === 'tool' || item.kind === 'thinking') {
+      currentGroup.push(item);
+    } else {
+      flushGroup();
+      blocks.push({ kind: 'single', item });
+    }
+  }
+  flushGroup();
+
+  return blocks;
+}
+
 export function ItemList({ items, running, editable = false }: { items: Item[]; running: boolean; editable?: boolean }) {
+  const blocks = useMemo(() => groupItems(items), [items]);
   return (
     <div className="space-y-3">
-      {items.map((item) => (
-        <ItemView key={item.key} item={item} running={running} editable={editable} />
-      ))}
+      {blocks.map((block) =>
+        block.kind === 'single' ? (
+          <ItemView key={block.item.key} item={block.item} running={running} editable={editable} />
+        ) : (
+          <ToolGroupView key={block.key} group={block} running={running} />
+        ),
+      )}
+    </div>
+  );
+}
+
+function ToolGroupView({
+  group,
+  running,
+}: {
+  group: { key: string; items: Item[]; toolCount: number; toolNames: string[] };
+  running: boolean;
+}) {
+  // 运行中默认展开展示各个脚本；运行完毕后默认自动收缩折叠，极大地节省纵向空间
+  const [open, setOpen] = useState(running);
+
+  useEffect(() => {
+    setOpen(running);
+  }, [running]);
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-line/70 bg-panel/50 text-sm shadow-card transition-all">
+      <button
+        type="button"
+        className="flex w-full min-w-0 items-center justify-between gap-2 px-3 py-2 text-left transition-colors hover:bg-sunken/50"
+        onClick={() => setOpen(!open)}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {running ? (
+            <LoaderCircle size={15} className="animate-spin text-accent shrink-0" />
+          ) : (
+            <CircleCheck size={15} className="text-emerald-500 shrink-0" />
+          )}
+          <span className="font-medium text-xs text-fg/90">
+            {running ? `正在执行 ${group.toolCount} 个脚本调用…` : `已完成 ${group.toolCount} 个脚本调用`}
+          </span>
+          <span className="truncate font-mono text-[0.6875rem] text-muted">
+            ({group.toolNames.join('、')})
+          </span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0 text-[0.6875rem] text-muted">
+          <span>{open ? '收起' : '展开查看明细'}</span>
+          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </div>
+      </button>
+      {open && (
+        <div className="space-y-2 border-t border-line/70 bg-sunken/25 p-3">
+          {group.items.map((item) => (
+            <ItemView key={item.key} item={item} running={running} editable={false} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -35,7 +139,7 @@ function ItemView({ item, running, editable }: { item: Item; running: boolean; e
   switch (item.kind) {
     case 'user':
       return (
-        <div className="group flex items-start justify-end gap-1.5">
+        <div id={`turn-anchor-${item.key}`} className="group flex w-full min-w-0 items-start justify-end gap-1.5 scroll-mt-6">
           {editable && !running && (
             <button
               className="mt-2 rounded-md p-1 text-muted opacity-0 transition-all hover:bg-sunken hover:text-fg group-hover:opacity-100"
@@ -45,7 +149,7 @@ function ItemView({ item, running, editable }: { item: Item; running: boolean; e
               <Pencil size={14} />
             </button>
           )}
-          <div className="flex max-w-[85%] flex-col items-end gap-1.5">
+          <div className="flex max-w-[85%] min-w-0 flex-col items-end gap-1.5">
             {(item.images.length > 0 || item.files.length > 0) && (
               <div className="flex flex-wrap justify-end gap-1.5">
                 {item.images.map((src, n) =>
@@ -67,7 +171,7 @@ function ItemView({ item, running, editable }: { item: Item; running: boolean; e
               </div>
             )}
             {item.text && (
-              <div className="whitespace-pre-wrap break-words rounded-[1.25rem] rounded-br-md bg-bubble px-4 py-2.5 text-[0.9375rem] leading-[1.7]">
+              <div className="max-w-full min-w-0 break-all [overflow-wrap:anywhere] whitespace-pre-wrap rounded-[1.25rem] rounded-br-md bg-bubble px-4 py-2.5 text-[0.9375rem] leading-[1.7] max-h-[70vh] overflow-y-auto scroll-thin">
                 {item.text}
               </div>
             )}
@@ -87,7 +191,7 @@ function ItemView({ item, running, editable }: { item: Item; running: boolean; e
     case 'text':
       return <Markdown text={item.text} />;
     case 'thinking':
-      return <Thinking text={item.text} />;
+      return <Thinking text={item.text} running={running} />;
     case 'tool':
       if (item.tool.name === 'TodoWrite') return <TodoList todos={item.tool.input?.todos ?? []} />;
       return <ToolCard tool={item.tool} running={running} />;
@@ -110,17 +214,33 @@ function ItemView({ item, running, editable }: { item: Item; running: boolean; e
   }
 }
 
-function Thinking({ text, live = false }: { text: string; live?: boolean }) {
-  const [open, setOpen] = useState(live);
+function Thinking({ text, running, live }: { text: string; running?: boolean; live?: boolean }) {
+  const isRunning = running ?? live ?? false;
+  // 运行中默认展开展示；运行完毕后默认收缩折叠，极大地节省纵向空间
+  const [open, setOpen] = useState(isRunning);
+
+  useEffect(() => {
+    setOpen(isRunning);
+  }, [isRunning]);
+
   return (
     <div className="text-sm text-muted">
-      <button className="flex items-center gap-1.5 transition-colors hover:text-fg" onClick={() => setOpen(!open)}>
-        <Brain size={14} className={live ? 'animate-pulse' : ''} />
-        {live ? '思考中…' : '思考过程'}
-        {text && (open ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
+      <button
+        type="button"
+        className="flex items-center gap-1.5 rounded-lg px-2 py-0.5 transition-colors hover:bg-sunken/60 hover:text-fg text-xs font-medium"
+        onClick={() => setOpen(!open)}
+      >
+        <Brain size={14} className={running ? 'animate-pulse text-accent' : 'text-muted'} />
+        <span>{running ? '思考中…' : '思考过程'}</span>
+        <span className="text-[0.6875rem] text-faint">
+          {open ? '（点击收起）' : '（点击展开）'}
+        </span>
+        {text && (open ? <ChevronDown size={13} /> : <ChevronRight size={13} />)}
       </button>
       {open && text && (
-        <div className="mt-1.5 whitespace-pre-wrap border-l-2 border-accent/25 pl-3 text-[0.8125rem] leading-relaxed">{text}</div>
+        <div className="mt-1.5 whitespace-pre-wrap border-l-2 border-accent/30 bg-sunken/30 rounded-r-lg p-2.5 text-[0.8125rem] leading-relaxed text-fg/85">
+          {text}
+        </div>
       )}
     </div>
   );
